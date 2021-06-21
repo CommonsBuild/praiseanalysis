@@ -1,0 +1,8 @@
+bokeh
+holoviews
+hvplot
+panel
+param
+pandas
+numpy
+scipy 
