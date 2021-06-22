@@ -16,11 +16,10 @@ data = pd.read_csv("praise_distributions.csv")
 
 #%%
 class DistributionInterventions(pm.Parameterized):
-    apply_constant_ubi = pm.Boolean(False)
     top_percent_hatchers = pm.Number(0.5, bounds=(0,1), step=0.01)
     ubi = pm.Number(5, bounds=(0, 100), step=1)
     pareto_beta = pm.Number(0.4, bounds=(0,1), step=0.01, precedence=-1)
-    
+    apply_constant_ubi = pm.Boolean(True)
     
     def __init__(self, data, **params):
         super(DistributionInterventions, self).__init__(**params)
@@ -59,7 +58,7 @@ class DistributionInterventions(pm.Parameterized):
         return hv.VLine(len(self.data)*self.top_percent_hatchers, color='red').opts(hv.opts.VLine(color='red'))
 
     def distribution(self):
-        return (self.augmented_data().hvplot.area(y='Impact Hours', title='Impact Hours Distribution', height=320) * self.data.hvplot.line(y='Impact Hours', title='Impact Hours Distribution') * self.percent_line()).opts(shared_axes=False)
+        return (self.augmented_data().hvplot.area(y='Impact Hours', title='Impact Hours Distribution') * self.data.hvplot.line(y='Impact Hours', title='Impact Hours Distribution') * self.percent_line()).opts(shared_axes=False)
 
     def cum_dist(self, val): #cumulative distribution function
         prob_lt_val = (self.augmented_data()['Impact Hours'] < val).mean() # you can get proportions by taking average of boolean values
@@ -81,7 +80,6 @@ class DistributionInterventions(pm.Parameterized):
     
     def resources_percentage(self, p):
         data = self.augmented_data()
-        data = pd.concat([data, self.data.iloc[len(data):]])
         relevant_percentile = np.percentile(data['Impact Hours'],p)
         is_gt_relevant_percentile = data['Impact Hours'] > relevant_percentile
         filtered_data = data[is_gt_relevant_percentile]
@@ -90,11 +88,12 @@ class DistributionInterventions(pm.Parameterized):
         return pct_hours
 
     def view_resources_percentage(self):
-        message = {}
-        for p in [99,90,50]:
-            message["Top {}% Hatchers".format(100-p)] = "{}%".format(round(self.resources_percentage(p)*100,2))
+        message = ""
+        for p in [50,80,90,95,99]:
+            message += "The top {} percent of the population\n".format(100-p)
+            message += "received {:0.2f} percent of the Impact Hours \n \n".format(self.resources_percentage(p))
             
-        return pd.DataFrame(message, index=["Hold"])
+        return pn.Pane(message)
     
     def gini_coefficient(self):
         x = self.augmented_data()['Impact Hours'].values
@@ -105,29 +104,24 @@ class DistributionInterventions(pm.Parameterized):
         denominator = 2*n*n*x_bar
         return sum_abs_diffs/denominator
     
-    def view_gini_coefficient(self):
-        g = self.gini_coefficient()
-        return f"GINI Coefficient of filtered data: {g}"
-    
     def view_data(self):
-        return self.augmented_data()
+        return self.augmented_data().head(10)
     
 
 
-
+d = DistributionInterventions(data)
 #%%
 
 class GaussianIntervention(DistributionInterventions):
-    top_percent_hatchers = pm.Number(0.5, bounds=(0,1), step=0.01, precedence=-1)
-    apply_constant_ubi = pm.Boolean(False)
-    apply_gaussian_ubi = pm.Boolean(False)
+    gubi_spread = pm.Number(0.03, bounds=(0,0.05), step=0.01, doc="Standard Deviation")
+    apply_constant_ubi = pm.Boolean(True)
+    apply_gaussian_ubi = pm.Boolean(True)
     ubi = pm.Number(5, bounds=(0, 100), step=1)
     gubi = pm.Number(15, bounds=(0, 100), step=1)
-    gubi_concentrate = pm.Number(0.03, bounds=(0,0.05), step=0.01, doc="Standard Deviation")
     
     def gaussian_function(self, x):
         mean = len(self.data[self.data['Impact Hours'] > gmean(self.filtered_data()['Impact Hours'])])
-        return self.gubi * np.exp(-((x - mean)**2) / 2*self.gubi_concentrate**2)
+        return self.gubi * np.exp(-((x - mean)**2) / 2*self.gubi_spread**2)
     
     def intervention(self):
         xs = np.linspace(0, len(self.filtered_data()), len(self.filtered_data()))
@@ -136,7 +130,7 @@ class GaussianIntervention(DistributionInterventions):
     
     def view_intervention(self):
         intervention = self.intervention()
-        return intervention.hvplot.line(x='x',y='y', title='Gaussian Intervention', height=320).opts(labelled=[])
+        return intervention.hvplot.line(x='x',y='y', title='Gaussian Intervention')
     
     def augmented_data(self):
         data = self.filtered_data()
@@ -164,11 +158,55 @@ class GaussianIntervention(DistributionInterventions):
         },index=['value'])
         
         
+        
 #%%
 
-dins = DistributionInterventions(data)
 gaus = GaussianIntervention(data)
-gini_coef = gaus.gini_coefficient
+merged_data = pd.read_csv('wage_deductions.csv').sort_values('Total Impact', ascending=False)
+merged_data = gaus.data.join(merged_data[['Deducted Impact Hours']], how='left')
+#%%
+
+class InterventionDashboard(GaussianIntervention):
+    apply_wage_intervention = pm.Boolean(False)
+    wage_deductions = pm.Number(0.85, bounds=(0, 0.85), step=0.01)
+    
+    def __init__(self, data, **params):
+        self.original_data = data
+        self.original_wage_data = data
+        super(InterventionDashboard, self).__init__(data, **params)
+        self.data = data.copy()
+        self.add_ubi()
+        self.original_impact_hours_deducted = abs(self.original_data['Deducted Impact Hours'].sum())
+        self.total_impact_hours_deducted = self.original_impact_hours_deducted
+    
+    @pm.depends('wage_deductions', 'apply_wage_intervention', watch=True)    
+    def wage_data(self):
+        if self.apply_wage_intervention:
+            wage_data = self.original_data.copy()
+            deductions = wage_data['Deducted Impact Hours']*(0.85-self.wage_deductions)
+            wage_data['Impact Hours'] = wage_data['Impact Hours'] - deductions
+            self.total_impact_hours_deducted = self.original_impact_hours_deducted - abs(deductions.sum())
+            self.original_wage_data = wage_data[['Handle', 'Impact Hours']]
+            self.add_ubi()
+        else:
+            self.original_wage_data = self.original_data
+            self.add_ubi()
+        
+    @pm.depends('ubi', 'apply_constant_ubi', watch=True)    
+    def add_ubi(self):
+        if self.apply_constant_ubi:
+            self.data['Impact Hours'] = self.original_wage_data['Impact Hours'] + self.ubi
+        else:
+            self.data['Impact Hours'] = self.original_wage_data['Impact Hours']
+            
+    def wage_info(self):
+        return pd.DataFrame({
+            'Total Impact Hours Deducted From Wages': self.total_impact_hours_deducted,
+            'Estimated Value': f"${round(self.total_impact_hours_deducted * 50, 2)}"
+        }, index=['IH'])
+#%%
+dashboard = InterventionDashboard(merged_data)
+gini_coef = dashboard.gini_coefficient
 #%%
 vanilla = pn.template.VanillaTemplate(
     logo='https://static.tildacdn.com/tild6265-6232-4633-b761-383632303436/Group_2.png',
@@ -180,19 +218,20 @@ vanilla = pn.template.VanillaTemplate(
 
 pn.config.sizing_mode = 'stretch_width'
 
-vanilla.sidebar.append(pn.Column(gaus,
+vanilla.sidebar.append(pn.Column(dashboard,
                                 pn.pane.Markdown(''' *** \n<p style="text-align: center;"><strong>Developed by <a title="Shawn Anderson" href="https://github.com/LinuxIsCool" target="_blank" rel="noopener">ygg_anderson</a> &amp;<br />deployed by <a title="Mohammad" href="https://github.com/spacelover92" target="_blank" rel="noopener">maghaali</a><br /></strong><strong>at <a title="Longtail Financial (github)" href="https://github.com/longtailfinancial" target="_blank" rel="noopener">Longtail Financial</a>&nbsp;<a title="Longtail Financial" href="https://longtailfinancial.com/" target="_blank" rel="noopener"><img style="vertical-align: middle;" src="https://longtailfinancial.com/wp-content/uploads/2020/03/Longtail-Logo-white-center.png" alt="Longtail Financial" width="20" height="20" /></a></strong></p> ''')))
 
 
-vanilla.main.append(pn.Row(pn.Column(gaus.distribution,
-                                     gaus.view_intervention ),
-                           pn.Column(gaus.view_gini_coefficient,
-                                     gaus.ubi_info,
-                                     gaus.view_resources_percentage,
-                                     pn.pane.Markdown(''' *** '''),  
-                                     gaus.view_data,
-                                                                   
+vanilla.main.append(pn.Row(pn.Column(dashboard.distribution,
+                                     dashboard.view_intervention ),
+                           pn.Column(dashboard.view_data,
+                                     "GINI Coefficient of filtered data",
+                                     dashboard.gini_coefficient,
+                                     dashboard.ubi_info,
+                                     dashboard.wage_info,
                                      sizing_mode='stretch_height',
                                      max_width=300)))
+
+            
 
 vanilla.servable()
