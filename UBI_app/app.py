@@ -58,7 +58,7 @@ class DistributionInterventions(pm.Parameterized):
         return hv.VLine(len(self.data)*self.top_percent_hatchers, color='red').opts(hv.opts.VLine(color='red'))
 
     def distribution(self):
-        return (self.augmented_data().hvplot.area(y='Impact Hours', title='Impact Hours Distribution', height=320) * self.data.hvplot.line(y='Impact Hours', title='Impact Hours Distribution') * self.percent_line()).opts(shared_axes=False)
+        return (self.augmented_data().hvplot.area(y='Impact Hours', title='Impact Hours Distribution') * self.data.hvplot.line(y='Impact Hours', title='Impact Hours Distribution') * self.percent_line()).opts(shared_axes=False)
 
     def cum_dist(self, val): #cumulative distribution function
         prob_lt_val = (self.augmented_data()['Impact Hours'] < val).mean() # you can get proportions by taking average of boolean values
@@ -109,7 +109,7 @@ class DistributionInterventions(pm.Parameterized):
     
 
 
-
+d = DistributionInterventions(data)
 #%%
 
 class GaussianIntervention(DistributionInterventions):
@@ -130,7 +130,7 @@ class GaussianIntervention(DistributionInterventions):
     
     def view_intervention(self):
         intervention = self.intervention()
-        return intervention.hvplot.line(x='x',y='y', title='Gaussian Intervention', height=320).opts(labelled=[])
+        return intervention.hvplot.line(x='x',y='y', title='Gaussian Intervention')
     
     def augmented_data(self):
         data = self.filtered_data()
@@ -158,11 +158,14 @@ class GaussianIntervention(DistributionInterventions):
         },index=['value'])
         
         
+        
 #%%
+
 gaus = GaussianIntervention(data)
 merged_data = pd.read_csv('wage_deductions.csv').sort_values('Total Impact', ascending=False)
 merged_data = gaus.data.join(merged_data[['Deducted Impact Hours']], how='left')
 #%%
+
 class InterventionDashboard(GaussianIntervention):
     apply_wage_intervention = pm.Boolean(False)
     wage_deductions = pm.Number(0.85, bounds=(0, 0.85), step=0.01)
@@ -201,11 +204,9 @@ class InterventionDashboard(GaussianIntervention):
             'Total Impact Hours Deducted From Wages': self.total_impact_hours_deducted,
             'Estimated Value': f"${round(self.total_impact_hours_deducted * 50, 2)}"
         }, index=['IH'])
-
 #%%
-dashboard = InterventionDashboard(merged_data)   
-# dins = DistributionInterventions(data)
-gini_coef = dashboard.gini_coefficient()
+dashboard = InterventionDashboard(merged_data)
+gini_coef = dashboard.gini_coefficient
 #%%
 vanilla = pn.template.VanillaTemplate(
     logo='https://static.tildacdn.com/tild6265-6232-4633-b761-383632303436/Group_2.png',
@@ -224,11 +225,13 @@ vanilla.sidebar.append(pn.Column(dashboard,
 vanilla.main.append(pn.Row(pn.Column(dashboard.distribution,
                                      dashboard.view_intervention ),
                            pn.Column(dashboard.view_data,
-                                     pn.pane.Markdown(''' *** '''),
+                                     "GINI Coefficient of filtered data",
+                                     dashboard.gini_coefficient,
                                      dashboard.ubi_info,
-                                     f"GINI Coefficient of filtered data: {gini_coef}",
                                      dashboard.wage_info,
                                      sizing_mode='stretch_height',
                                      max_width=300)))
+
+            
 
 vanilla.servable()
