@@ -16,10 +16,11 @@ data = pd.read_csv("praise_distributions.csv")
 
 #%%
 class DistributionInterventions(pm.Parameterized):
+    apply_constant_ubi = pm.Boolean(False)
     top_percent_hatchers = pm.Number(0.5, bounds=(0,1), step=0.01)
     ubi = pm.Number(5, bounds=(0, 100), step=1)
     pareto_beta = pm.Number(0.4, bounds=(0,1), step=0.01, precedence=-1)
-    apply_constant_ubi = pm.Boolean(True)
+    
     
     def __init__(self, data, **params):
         super(DistributionInterventions, self).__init__(**params)
@@ -80,6 +81,7 @@ class DistributionInterventions(pm.Parameterized):
     
     def resources_percentage(self, p):
         data = self.augmented_data()
+        data = pd.concat([data, self.data.iloc[len(data):]])
         relevant_percentile = np.percentile(data['Impact Hours'],p)
         is_gt_relevant_percentile = data['Impact Hours'] > relevant_percentile
         filtered_data = data[is_gt_relevant_percentile]
@@ -88,12 +90,11 @@ class DistributionInterventions(pm.Parameterized):
         return pct_hours
 
     def view_resources_percentage(self):
-        message = ""
-        for p in [50,80,90,95,99]:
-            message += "The top {} percent of the population\n".format(100-p)
-            message += "received {:0.2f} percent of the Impact Hours \n \n".format(self.resources_percentage(p))
+        message = {}
+        for p in [99,90,50]:
+            message["Top {}% Hatchers".format(100-p)] = "{}%".format(round(self.resources_percentage(p)*100,2))
             
-        return pn.Pane(message)
+        return pd.DataFrame(message, index=["Hold"])
     
     def gini_coefficient(self):
         x = self.augmented_data()['Impact Hours'].values
@@ -104,8 +105,12 @@ class DistributionInterventions(pm.Parameterized):
         denominator = 2*n*n*x_bar
         return sum_abs_diffs/denominator
     
+    def view_gini_coefficient(self):
+        g = self.gini_coefficient()
+        return f"GINI Coefficient of filtered data: {g}"
+    
     def view_data(self):
-        return self.augmented_data().head(10)
+        return self.augmented_data()
     
 
 
@@ -113,15 +118,16 @@ class DistributionInterventions(pm.Parameterized):
 #%%
 
 class GaussianIntervention(DistributionInterventions):
-    gubi_spread = pm.Number(0.03, bounds=(0,0.05), step=0.01, doc="Standard Deviation")
-    apply_constant_ubi = pm.Boolean(True)
-    apply_gaussian_ubi = pm.Boolean(True)
+    top_percent_hatchers = pm.Number(0.5, bounds=(0,1), step=0.01, precedence=-1)
+    apply_constant_ubi = pm.Boolean(False)
+    apply_gaussian_ubi = pm.Boolean(False)
     ubi = pm.Number(5, bounds=(0, 100), step=1)
     gubi = pm.Number(15, bounds=(0, 100), step=1)
+    gubi_concentrate = pm.Number(0.03, bounds=(0,0.05), step=0.01, doc="Standard Deviation")
     
     def gaussian_function(self, x):
         mean = len(self.data[self.data['Impact Hours'] > gmean(self.filtered_data()['Impact Hours'])])
-        return self.gubi * np.exp(-((x - mean)**2) / 2*self.gubi_spread**2)
+        return self.gubi * np.exp(-((x - mean)**2) / 2*self.gubi_concentrate**2)
     
     def intervention(self):
         xs = np.linspace(0, len(self.filtered_data()), len(self.filtered_data()))
@@ -162,7 +168,7 @@ class GaussianIntervention(DistributionInterventions):
 
 dins = DistributionInterventions(data)
 gaus = GaussianIntervention(data)
-gini_coef = gaus.gini_coefficient()
+gini_coef = gaus.gini_coefficient
 #%%
 vanilla = pn.template.VanillaTemplate(
     logo='https://static.tildacdn.com/tild6265-6232-4633-b761-383632303436/Group_2.png',
@@ -180,10 +186,12 @@ vanilla.sidebar.append(pn.Column(gaus,
 
 vanilla.main.append(pn.Row(pn.Column(gaus.distribution,
                                      gaus.view_intervention ),
-                           pn.Column(gaus.view_data,
-                                     pn.pane.Markdown(''' *** '''),
+                           pn.Column(gaus.view_gini_coefficient,
                                      gaus.ubi_info,
-                                     f"GINI Coefficient of filtered data: {gini_coef}",
+                                     gaus.view_resources_percentage,
+                                     pn.pane.Markdown(''' *** '''),  
+                                     gaus.view_data,
+                                                                   
                                      sizing_mode='stretch_height',
                                      max_width=300)))
 
